@@ -13,21 +13,29 @@ import (
 	"retrieval-service/internal/usecase"
 )
 
-type searcherFunc func(context.Context, usecase.SearchRequest) ([]domain.SearchResult, error)
+type searcherFunc func(context.Context, usecase.SearchRequest) (domain.SearchResponse, error)
 
-func (f searcherFunc) Search(ctx context.Context, request usecase.SearchRequest) ([]domain.SearchResult, error) {
+func (f searcherFunc) Search(ctx context.Context, request usecase.SearchRequest) (domain.SearchResponse, error) {
 	return f(ctx, request)
 }
 
 func TestSearchHandlerUsesDefaultsAndReturnsResults(t *testing.T) {
-	searcher := searcherFunc(func(_ context.Context, request usecase.SearchRequest) ([]domain.SearchResult, error) {
+	searcher := searcherFunc(func(_ context.Context, request usecase.SearchRequest) (domain.SearchResponse, error) {
 		if request.Query != "Where is Acme?" {
 			t.Errorf("query = %q", request.Query)
 		}
 		if request.Strategy != usecase.StrategyHybrid || request.Limit != 5 || request.GraphDepth != 1 {
 			t.Errorf("request defaults = %+v", request)
 		}
-		return []domain.SearchResult{{ID: "chunk-1", Text: "Found it"}}, nil
+		return domain.SearchResponse{
+			Results: []domain.SearchResult{{ID: "chunk-1", Text: "Found it"}},
+			GraphFacts: []domain.GraphFact{{
+				SourceEntity: "Acme", RelationType: "partner_of", TargetEntity: "Supplier",
+				Distance: 1, EvidenceChunkIDs: []string{"chunk-1"},
+			}},
+			VectorStatus: "ok",
+			GraphStatus:  "ok",
+		}, nil
 	})
 	handler, err := NewHandler(searcher)
 	if err != nil {
@@ -44,19 +52,20 @@ func TestSearchHandlerUsesDefaultsAndReturnsResults(t *testing.T) {
 	if got := response.Header().Get("Content-Type"); got != "application/json" {
 		t.Fatalf("Content-Type = %q", got)
 	}
-	var body searchResponse
+	var body domain.SearchResponse
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(body.Results) != 1 || body.Results[0].ID != "chunk-1" {
-		t.Fatalf("response results = %#v", body.Results)
+	if len(body.Results) != 1 || body.Results[0].ID != "chunk-1" ||
+		len(body.GraphFacts) != 1 || body.GraphFacts[0].EvidenceChunkIDs[0] != "chunk-1" {
+		t.Fatalf("response = %#v", body)
 	}
 }
 
 func TestSearchHandlerRejectsInvalidBody(t *testing.T) {
-	handler, err := NewHandler(searcherFunc(func(context.Context, usecase.SearchRequest) ([]domain.SearchResult, error) {
+	handler, err := NewHandler(searcherFunc(func(context.Context, usecase.SearchRequest) (domain.SearchResponse, error) {
 		t.Fatal("searcher called for invalid request")
-		return nil, nil
+		return domain.SearchResponse{}, nil
 	}))
 	if err != nil {
 		t.Fatalf("NewHandler() error = %v", err)
@@ -88,8 +97,8 @@ func TestSearchHandlerMapsUseCaseErrors(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			handler, err := NewHandler(searcherFunc(func(context.Context, usecase.SearchRequest) ([]domain.SearchResult, error) {
-				return nil, test.err
+			handler, err := NewHandler(searcherFunc(func(context.Context, usecase.SearchRequest) (domain.SearchResponse, error) {
+				return domain.SearchResponse{}, test.err
 			}))
 			if err != nil {
 				t.Fatalf("NewHandler() error = %v", err)

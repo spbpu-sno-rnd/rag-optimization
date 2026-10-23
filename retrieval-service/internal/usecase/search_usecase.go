@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
-
-	"golang.org/x/sync/errgroup"
+	"sync"
 
 	"retrieval-service/internal/domain"
 )
@@ -52,7 +52,7 @@ type VectorSearcher interface {
 }
 
 type GraphSearcher interface {
-	Search(ctx context.Context, entities []string, depth, limit int) ([]domain.SearchResult, error)
+	Search(ctx context.Context, entities []string, depth, limit int) (domain.GraphSearchResults, error)
 }
 
 type SearchUseCase struct {
@@ -77,12 +77,12 @@ func NewSearchUseCase(
 	}, nil
 }
 
-func (u *SearchUseCase) Search(ctx context.Context, request SearchRequest) ([]domain.SearchResult, error) {
+func (u *SearchUseCase) Search(ctx context.Context, request SearchRequest) (domain.SearchResponse, error) {
 	if ctx == nil {
-		return nil, fmt.Errorf("%w: context is nil", ErrInvalidRequest)
+		return domain.SearchResponse{}, fmt.Errorf("%w: context is nil", ErrInvalidRequest)
 	}
 	if err := validateRequest(request); err != nil {
-		return nil, err
+		return domain.SearchResponse{}, err
 	}
 	request.Query = strings.TrimSpace(request.Query)
 
@@ -94,7 +94,7 @@ func (u *SearchUseCase) Search(ctx context.Context, request SearchRequest) ([]do
 	case StrategyHybrid:
 		return u.hybridSearch(ctx, request)
 	default:
-		return nil, fmt.Errorf("%w: unsupported strategy %q", ErrInvalidRequest, request.Strategy)
+		return domain.SearchResponse{}, fmt.Errorf("%w: unsupported strategy %q", ErrInvalidRequest, request.Strategy)
 	}
 }
 
@@ -117,74 +117,129 @@ func validateRequest(request SearchRequest) error {
 	return nil
 }
 
-func (u *SearchUseCase) vectorSearch(ctx context.Context, request SearchRequest) ([]domain.SearchResult, error) {
+func (u *SearchUseCase) vectorSearch(ctx context.Context, request SearchRequest) (domain.SearchResponse, error) {
 	queryData, err := u.processor.Process(ctx, request.Query)
 	if err != nil {
-		return nil, fmt.Errorf("process query: %w", err)
+		return domain.SearchResponse{}, fmt.Errorf("process query: %w", err)
 	}
 	if len(queryData.Embedding) != EmbeddingDimension {
-		return nil, fmt.Errorf("%w: embedding has dimension %d, want %d", ErrInvalidQueryData, len(queryData.Embedding), EmbeddingDimension)
+		return domain.SearchResponse{}, fmt.Errorf("%w: embedding has dimension %d, want %d", ErrInvalidQueryData, len(queryData.Embedding), EmbeddingDimension)
 	}
 	results, err := u.vector.Search(ctx, queryData.Embedding, request.Limit)
 	if err != nil {
-		return nil, fmt.Errorf("vector search: %w", err)
+		return domain.SearchResponse{}, fmt.Errorf("vector search: %w", err)
 	}
-	return setSource(results, domain.SourceVector)
+	results, err = setSource(results, domain.SourceVector)
+	if err != nil {
+		return domain.SearchResponse{}, err
+	}
+	return domain.SearchResponse{
+		Results:      results,
+		GraphFacts:   []domain.GraphFact{},
+		VectorStatus: "ok",
+		GraphStatus:  "skipped",
+	}, nil
 }
 
-func (u *SearchUseCase) graphSearch(ctx context.Context, request SearchRequest) ([]domain.SearchResult, error) {
+func (u *SearchUseCase) graphSearch(ctx context.Context, request SearchRequest) (domain.SearchResponse, error) {
 	queryData, err := u.processor.Process(ctx, request.Query)
 	if err != nil {
-		return nil, fmt.Errorf("process query: %w", err)
+		return domain.SearchResponse{}, fmt.Errorf("process query: %w", err)
 	}
 	if len(queryData.Entities) == 0 {
-		return []domain.SearchResult{}, nil
+		return domain.SearchResponse{
+			Results:      []domain.SearchResult{},
+			GraphFacts:   []domain.GraphFact{},
+			VectorStatus: "skipped",
+			GraphStatus:  "skipped",
+		}, nil
 	}
-	results, err := u.graph.Search(ctx, queryData.Entities, request.GraphDepth, request.Limit)
+	graphResults, err := u.graph.Search(ctx, queryData.Entities, request.GraphDepth, request.Limit)
 	if err != nil {
-		return nil, fmt.Errorf("graph search: %w", err)
+		return domain.SearchResponse{}, fmt.Errorf("graph search: %w", err)
 	}
-	return setSource(results, domain.SourceGraph)
+	graphResults.Chunks, err = setSource(graphResults.Chunks, domain.SourceGraph)
+	if err != nil {
+		return domain.SearchResponse{}, err
+	}
+	return domain.SearchResponse{
+		Results:      graphResults.Chunks,
+		GraphFacts:   graphResults.Facts,
+		VectorStatus: "skipped",
+		GraphStatus:  "ok",
+	}, nil
 }
 
-func (u *SearchUseCase) hybridSearch(ctx context.Context, request SearchRequest) ([]domain.SearchResult, error) {
+func (u *SearchUseCase) hybridSearch(ctx context.Context, request SearchRequest) (domain.SearchResponse, error) {
 	queryData, err := u.processor.Process(ctx, request.Query)
 	if err != nil {
-		return nil, fmt.Errorf("process query: %w", err)
+		return domain.SearchResponse{}, fmt.Errorf("process query: %w", err)
 	}
 	if len(queryData.Embedding) != EmbeddingDimension {
-		return nil, fmt.Errorf("%w: embedding has dimension %d, want %d", ErrInvalidQueryData, len(queryData.Embedding), EmbeddingDimension)
+		return domain.SearchResponse{}, fmt.Errorf("%w: embedding has dimension %d, want %d", ErrInvalidQueryData, len(queryData.Embedding), EmbeddingDimension)
 	}
 
-	group, groupCtx := errgroup.WithContext(ctx)
 	var vectorResults, graphResults []domain.SearchResult
+	graphFacts := make([]domain.GraphFact, 0)
+	var vectorErr, graphErr error
+	var group sync.WaitGroup
+	group.Add(2)
 
-	group.Go(func() error {
-		results, err := u.vector.Search(groupCtx, queryData.Embedding, request.Limit)
-		if err != nil {
-			return fmt.Errorf("vector search: %w", err)
+	go func() {
+		defer group.Done()
+		results, searchErr := u.vector.Search(ctx, queryData.Embedding, request.Limit)
+		if searchErr != nil {
+			vectorErr = fmt.Errorf("vector search: %w", searchErr)
+			return
 		}
-		vectorResults, err = setSource(results, domain.SourceVector)
-		return err
-	})
+		vectorResults, vectorErr = setSource(results, domain.SourceVector)
+	}()
 
-	group.Go(func() error {
+	go func() {
+		defer group.Done()
 		if len(queryData.Entities) == 0 {
-			graphResults = []domain.SearchResult{}
-			return nil
+			return
 		}
-		results, err := u.graph.Search(groupCtx, queryData.Entities, request.GraphDepth, request.Limit)
-		if err != nil {
-			return fmt.Errorf("graph search: %w", err)
+		results, searchErr := u.graph.Search(ctx, queryData.Entities, request.GraphDepth, request.Limit)
+		if searchErr != nil {
+			graphErr = fmt.Errorf("graph search: %w", searchErr)
+			return
 		}
-		graphResults, err = setSource(results, domain.SourceGraph)
-		return err
-	})
+		graphResults, graphErr = setSource(results.Chunks, domain.SourceGraph)
+		if graphErr == nil {
+			graphFacts = results.Facts
+		}
+	}()
 
-	if err := group.Wait(); err != nil {
-		return nil, err
+	group.Wait()
+	if vectorErr != nil {
+		slog.WarnContext(ctx, "vector search failed; returning partial hybrid results", "error", vectorErr)
 	}
-	return reciprocalRankFusion(vectorResults, graphResults, request.Limit), nil
+	if graphErr != nil {
+		slog.WarnContext(ctx, "graph search failed; returning partial hybrid results", "error", graphErr)
+	}
+	if vectorErr != nil && graphErr != nil {
+		return domain.SearchResponse{}, fmt.Errorf("hybrid search failed: %w", errors.Join(vectorErr, graphErr))
+	}
+
+	response := domain.SearchResponse{
+		Results:      reciprocalRankFusion(vectorResults, graphResults, request.Limit),
+		GraphFacts:   graphFacts,
+		Partial:      vectorErr != nil || graphErr != nil,
+		VectorStatus: searchStatus(vectorErr, true),
+		GraphStatus:  searchStatus(graphErr, len(queryData.Entities) > 0),
+	}
+	return response, nil
+}
+
+func searchStatus(err error, attempted bool) string {
+	if err != nil {
+		return "error"
+	}
+	if !attempted {
+		return "skipped"
+	}
+	return "ok"
 }
 
 func setSource(results []domain.SearchResult, source domain.Source) ([]domain.SearchResult, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"retrieval-service/internal/domain"
@@ -28,7 +29,7 @@ func (s testVectorSearcher) Search(context.Context, []float32, int) ([]domain.Se
 }
 
 type testGraphSearcher struct {
-	results []domain.SearchResult
+	results domain.GraphSearchResults
 	err     error
 }
 
@@ -36,7 +37,7 @@ func testEmbedding() []float32 {
 	return make([]float32, EmbeddingDimension)
 }
 
-func (s testGraphSearcher) Search(context.Context, []string, int, int) ([]domain.SearchResult, error) {
+func (s testGraphSearcher) Search(context.Context, []string, int, int) (domain.GraphSearchResults, error) {
 	return s.results, s.err
 }
 
@@ -59,8 +60,8 @@ func TestSearchVector(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
-	if got[0].Score != 0.9 || !reflect.DeepEqual(got[0].Sources, []domain.Source{domain.SourceVector}) {
-		t.Fatalf("Search() result = %#v", got[0])
+	if got.Results[0].Score != 0.9 || !reflect.DeepEqual(got.Results[0].Sources, []domain.Source{domain.SourceVector}) {
+		t.Fatalf("Search() result = %#v", got.Results[0])
 	}
 }
 
@@ -73,8 +74,8 @@ func TestSearchGraphWithoutEntities(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
-	if len(got) != 0 {
-		t.Fatalf("Search() results = %#v, want none", got)
+	if len(got.Results) != 0 || got.GraphStatus != "skipped" {
+		t.Fatalf("Search() response = %#v, want no results and skipped graph", got)
 	}
 }
 
@@ -86,9 +87,15 @@ func TestSearchHybridFusesRankings(t *testing.T) {
 			{ID: "shared", Text: "shared result", Score: 0.9},
 			{ID: "vector-only", Text: "vector result", Score: 0.8},
 		}},
-		testGraphSearcher{results: []domain.SearchResult{
-			{ID: "shared", Text: "shared result"},
-			{ID: "graph-only", Text: "graph result"},
+		testGraphSearcher{results: domain.GraphSearchResults{
+			Chunks: []domain.SearchResult{
+				{ID: "shared", Text: "shared result"},
+				{ID: "graph-only", Text: "graph result"},
+			},
+			Facts: []domain.GraphFact{{
+				SourceEntity: "Acme", RelationType: "partner_of", TargetEntity: "Supplier",
+				Distance: 1, EvidenceChunkIDs: []string{"shared"},
+			}},
 		}},
 	)
 
@@ -98,14 +105,20 @@ func TestSearchHybridFusesRankings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
-	if len(got) != 3 {
-		t.Fatalf("Search() returned %d results, want 3", len(got))
+	if len(got.Results) != 3 {
+		t.Fatalf("Search() returned %d results, want 3", len(got.Results))
 	}
-	if got[0].ID != "shared" || !reflect.DeepEqual(got[0].Sources, []domain.Source{domain.SourceVector, domain.SourceGraph}) {
-		t.Fatalf("top fused result = %#v", got[0])
+	if got.Results[0].ID != "shared" || !reflect.DeepEqual(got.Results[0].Sources, []domain.Source{domain.SourceVector, domain.SourceGraph}) {
+		t.Fatalf("top fused result = %#v", got.Results[0])
 	}
-	if got[1].ID != "graph-only" || got[2].ID != "vector-only" {
-		t.Fatalf("fused result ordering = %q, %q, %q", got[0].ID, got[1].ID, got[2].ID)
+	if got.Results[1].ID != "graph-only" || got.Results[2].ID != "vector-only" {
+		t.Fatalf("fused result ordering = %q, %q, %q", got.Results[0].ID, got.Results[1].ID, got.Results[2].ID)
+	}
+	if len(got.GraphFacts) != 1 || got.GraphFacts[0].EvidenceChunkIDs[0] != "shared" {
+		t.Fatalf("graph facts = %#v", got.GraphFacts)
+	}
+	if got.Partial || got.VectorStatus != "ok" || got.GraphStatus != "ok" {
+		t.Fatalf("source status = %#v", got)
 	}
 }
 
@@ -146,5 +159,49 @@ func TestSearchRejectsUnexpectedEmbeddingDimension(t *testing.T) {
 	})
 	if !errors.Is(err, ErrInvalidQueryData) {
 		t.Fatalf("Search() error = %v, want ErrInvalidQueryData", err)
+	}
+}
+
+func TestHybridReturnsPartialResultsWhenOneSourceFails(t *testing.T) {
+	vectorErr := errors.New("Qdrant unavailable")
+	service := newTestUseCase(
+		t,
+		testProcessor{data: QueryData{Embedding: testEmbedding(), Entities: []string{"Acme"}}},
+		testVectorSearcher{err: vectorErr},
+		testGraphSearcher{results: domain.GraphSearchResults{
+			Chunks: []domain.SearchResult{{ID: "evidence", Text: "Supported fact"}},
+			Facts: []domain.GraphFact{{
+				SourceEntity: "Acme", RelationType: "partner_of", TargetEntity: "Supplier",
+				Distance: 1, EvidenceChunkIDs: []string{"evidence"},
+			}},
+		}},
+	)
+
+	got, err := service.Search(context.Background(), SearchRequest{
+		Query: "question", Strategy: StrategyHybrid, Limit: 3, GraphDepth: 1,
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if !got.Partial || got.VectorStatus != "error" || got.GraphStatus != "ok" {
+		t.Fatalf("source status = %#v", got)
+	}
+	if len(got.Results) != 1 || got.Results[0].ID != "evidence" || len(got.GraphFacts) != 1 {
+		t.Fatalf("partial response = %#v", got)
+	}
+}
+
+func TestHybridFailsWhenBothSourcesFail(t *testing.T) {
+	service := newTestUseCase(
+		t,
+		testProcessor{data: QueryData{Embedding: testEmbedding(), Entities: []string{"Acme"}}},
+		testVectorSearcher{err: errors.New("Qdrant unavailable")},
+		testGraphSearcher{err: errors.New("Neo4j unavailable")},
+	)
+	_, err := service.Search(context.Background(), SearchRequest{
+		Query: "question", Strategy: StrategyHybrid, Limit: 3, GraphDepth: 1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "Qdrant unavailable") || !strings.Contains(err.Error(), "Neo4j unavailable") {
+		t.Fatalf("Search() error = %v, want both source errors", err)
 	}
 }

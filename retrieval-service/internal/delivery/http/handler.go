@@ -15,7 +15,7 @@ import (
 const maxRequestBodySize = 1 << 20
 
 type Searcher interface {
-	Search(ctx context.Context, request usecase.SearchRequest) ([]domain.SearchResult, error)
+	Search(ctx context.Context, request usecase.SearchRequest) (domain.SearchResponse, error)
 }
 
 type Handler struct {
@@ -27,10 +27,6 @@ type searchRequest struct {
 	Strategy   usecase.Strategy `json:"strategy,omitempty"`
 	Limit      int              `json:"limit,omitempty"`
 	GraphDepth int              `json:"graph_depth,omitempty"`
-}
-
-type searchResponse struct {
-	Results []domain.SearchResult `json:"results"`
 }
 
 type errorResponse struct {
@@ -85,7 +81,7 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, searchResponse{Results: results})
+	writeJSON(w, http.StatusOK, results)
 }
 
 func Health(w http.ResponseWriter, _ *http.Request) {

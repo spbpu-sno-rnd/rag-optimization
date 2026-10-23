@@ -15,3 +15,24 @@ type SearchResult struct {
 	Score      float64           `json:"score"`
 	Sources    []Source          `json:"sources"`
 }
+
+type GraphFact struct {
+	SourceEntity     string   `json:"source_entity"`
+	RelationType     string   `json:"relation_type"`
+	TargetEntity     string   `json:"target_entity"`
+	Distance         int      `json:"distance"`
+	EvidenceChunkIDs []string `json:"source_chunk_ids"`
+}
+
+type GraphSearchResults struct {
+	Chunks []SearchResult
+	Facts  []GraphFact
+}
+
+type SearchResponse struct {
+	Results      []SearchResult `json:"results"`
+	GraphFacts   []GraphFact    `json:"graph_facts"`
+	Partial      bool           `json:"partial"`
+	VectorStatus string         `json:"vector_status"`
+	GraphStatus  string         `json:"graph_status"`
+}
