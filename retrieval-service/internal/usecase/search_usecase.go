@@ -19,6 +19,7 @@ const (
 	StrategyGraph  Strategy = "graph_local"
 	StrategyHybrid Strategy = "hybrid"
 
+	EmbeddingDimension = 384
 	MaxSearchLimit     = 100
 	defaultRRFConstant = 60
 )
@@ -121,8 +122,8 @@ func (u *SearchUseCase) vectorSearch(ctx context.Context, request SearchRequest)
 	if err != nil {
 		return nil, fmt.Errorf("process query: %w", err)
 	}
-	if len(queryData.Embedding) == 0 {
-		return nil, fmt.Errorf("%w: embedding is empty", ErrInvalidQueryData)
+	if len(queryData.Embedding) != EmbeddingDimension {
+		return nil, fmt.Errorf("%w: embedding has dimension %d, want %d", ErrInvalidQueryData, len(queryData.Embedding), EmbeddingDimension)
 	}
 	results, err := u.vector.Search(ctx, queryData.Embedding, request.Limit)
 	if err != nil {
@@ -151,8 +152,8 @@ func (u *SearchUseCase) hybridSearch(ctx context.Context, request SearchRequest)
 	if err != nil {
 		return nil, fmt.Errorf("process query: %w", err)
 	}
-	if len(queryData.Embedding) == 0 {
-		return nil, fmt.Errorf("%w: embedding is empty", ErrInvalidQueryData)
+	if len(queryData.Embedding) != EmbeddingDimension {
+		return nil, fmt.Errorf("%w: embedding has dimension %d, want %d", ErrInvalidQueryData, len(queryData.Embedding), EmbeddingDimension)
 	}
 
 	group, groupCtx := errgroup.WithContext(ctx)

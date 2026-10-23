@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -33,7 +34,7 @@ func TestClientProcess(t *testing.T) {
 
 func TestClientProcessReportsHTTPError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		http.Error(w, "embedding model unavailable", http.StatusServiceUnavailable)
 	}))
 	defer server.Close()
 
@@ -41,7 +42,7 @@ func TestClientProcessReportsHTTPError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	if _, err := client.Process(context.Background(), "question"); err == nil {
-		t.Fatal("Process() succeeded on HTTP 503")
+	if _, err := client.Process(context.Background(), "question"); err == nil || !strings.Contains(err.Error(), "embedding model unavailable") {
+		t.Fatalf("Process() error = %v, want error body from HTTP 503", err)
 	}
 }

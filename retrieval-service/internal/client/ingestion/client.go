@@ -59,7 +59,15 @@ func (c *Client) Process(ctx context.Context, query string) (usecase.QueryData, 
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return usecase.QueryData{}, fmt.Errorf("ingestion query processor returned HTTP %d", response.StatusCode)
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, maxResponseBodySize))
+		if readErr != nil {
+			return usecase.QueryData{}, fmt.Errorf("read ingestion error response (HTTP %d): %w", response.StatusCode, readErr)
+		}
+		message := strings.TrimSpace(string(body))
+		if message == "" {
+			return usecase.QueryData{}, fmt.Errorf("ingestion query processor returned HTTP %d", response.StatusCode)
+		}
+		return usecase.QueryData{}, fmt.Errorf("ingestion query processor returned HTTP %d: %s", response.StatusCode, message)
 	}
 
 	decoder := json.NewDecoder(io.LimitReader(response.Body, maxResponseBodySize))

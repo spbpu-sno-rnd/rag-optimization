@@ -32,6 +32,10 @@ type testGraphSearcher struct {
 	err     error
 }
 
+func testEmbedding() []float32 {
+	return make([]float32, EmbeddingDimension)
+}
+
 func (s testGraphSearcher) Search(context.Context, []string, int, int) ([]domain.SearchResult, error) {
 	return s.results, s.err
 }
@@ -47,7 +51,7 @@ func newTestUseCase(t *testing.T, processor QueryProcessor, vector VectorSearche
 
 func TestSearchVector(t *testing.T) {
 	want := []domain.SearchResult{{ID: "chunk-1", Text: "result", Score: 0.9}}
-	service := newTestUseCase(t, testProcessor{data: QueryData{Embedding: []float32{0.1}}}, testVectorSearcher{results: want}, testGraphSearcher{})
+	service := newTestUseCase(t, testProcessor{data: QueryData{Embedding: testEmbedding()}}, testVectorSearcher{results: want}, testGraphSearcher{})
 
 	got, err := service.Search(context.Background(), SearchRequest{
 		Query: "question", Strategy: StrategyVector, Limit: 3,
@@ -77,7 +81,7 @@ func TestSearchGraphWithoutEntities(t *testing.T) {
 func TestSearchHybridFusesRankings(t *testing.T) {
 	service := newTestUseCase(
 		t,
-		testProcessor{data: QueryData{Embedding: []float32{0.1}, Entities: []string{"Acme"}}},
+		testProcessor{data: QueryData{Embedding: testEmbedding(), Entities: []string{"Acme"}}},
 		testVectorSearcher{results: []domain.SearchResult{
 			{ID: "shared", Text: "shared result", Score: 0.9},
 			{ID: "vector-only", Text: "vector result", Score: 0.8},
@@ -124,12 +128,23 @@ func TestSearchRejectsInvalidRequest(t *testing.T) {
 
 func TestSearchPropagatesVectorError(t *testing.T) {
 	wantErr := errors.New("vector database unavailable")
-	service := newTestUseCase(t, testProcessor{data: QueryData{Embedding: []float32{0.1}}}, testVectorSearcher{err: wantErr}, testGraphSearcher{})
+	service := newTestUseCase(t, testProcessor{data: QueryData{Embedding: testEmbedding()}}, testVectorSearcher{err: wantErr}, testGraphSearcher{})
 
 	_, err := service.Search(context.Background(), SearchRequest{
 		Query: "question", Strategy: StrategyVector, Limit: 1,
 	})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Search() error = %v, want wrapped vector error", err)
+	}
+}
+
+func TestSearchRejectsUnexpectedEmbeddingDimension(t *testing.T) {
+	service := newTestUseCase(t, testProcessor{data: QueryData{Embedding: []float32{0.1}}}, testVectorSearcher{}, testGraphSearcher{})
+
+	_, err := service.Search(context.Background(), SearchRequest{
+		Query: "question", Strategy: StrategyVector, Limit: 1,
+	})
+	if !errors.Is(err, ErrInvalidQueryData) {
+		t.Fatalf("Search() error = %v, want ErrInvalidQueryData", err)
 	}
 }

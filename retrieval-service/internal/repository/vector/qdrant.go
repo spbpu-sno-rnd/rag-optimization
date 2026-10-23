@@ -106,8 +106,12 @@ func (q *Qdrant) Search(ctx context.Context, embedding []float32, limit int) ([]
 	results := make([]domain.SearchResult, 0, len(result.Result.Points))
 	for index, point := range result.Result.Points {
 		id := stringPayload(point.Payload, "chunk_id")
+		pointID := decodePointID(point.ID)
+		if id != "" && pointID != "" && id != pointID {
+			return nil, fmt.Errorf("Qdrant point at rank %d has mismatched point ID and chunk_id", index+1)
+		}
 		if id == "" {
-			id = decodePointID(point.ID)
+			id = pointID
 		}
 		text := stringPayload(point.Payload, "text")
 		if strings.TrimSpace(id) == "" || strings.TrimSpace(text) == "" {

@@ -25,7 +25,7 @@ func TestQdrantSearch(t *testing.T) {
 			t.Errorf("query body = %+v", body)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"result":{"points":[{"id":"point-1","score":0.8,"payload":{"chunk_id":"chunk-1","text":"A fact","document_id":"doc-1","metadata":{"year":"2023","page":4}}}]}}`))
+		_, _ = w.Write([]byte(`{"result":{"points":[{"id":"chunk-1","score":0.8,"payload":{"chunk_id":"chunk-1","text":"A fact","document_id":"doc-1","metadata":{"year":"2023","page":4}}}]}}`))
 	}))
 	defer server.Close()
 
@@ -53,5 +53,20 @@ func TestQdrantSearchRejectsMissingPayload(t *testing.T) {
 	}
 	if _, err := client.Search(context.Background(), []float32{1}, 1); err == nil {
 		t.Fatal("Search() succeeded without required payload")
+	}
+}
+
+func TestQdrantSearchRejectsMismatchedChunkID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"result":{"points":[{"id":"point-id","score":0.8,"payload":{"chunk_id":"chunk-id","text":"A fact"}}]}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewQdrant(server.URL, "documents", "", &http.Client{Timeout: time.Second})
+	if err != nil {
+		t.Fatalf("NewQdrant() error = %v", err)
+	}
+	if _, err := client.Search(context.Background(), []float32{1}, 1); err == nil {
+		t.Fatal("Search() succeeded with mismatched point ID and chunk_id")
 	}
 }
