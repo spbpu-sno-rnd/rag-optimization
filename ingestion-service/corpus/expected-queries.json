@@ -1,0 +1,5 @@
+[
+  {"query":"How did Acme work with Northstar?","strategy":"hybrid","expected_source":"acme-launch.md","expected_entities":["Acme","Northstar Supplies"],"expected_relation":{"source_entity":"Acme","relation_type":"partnered_with","target_entity":"Northstar Supplies"}},
+  {"query":"What does Northstar manufacture?","strategy":"vector","expected_source":"northstar.txt","expected_entities":["Northstar Supplies"]},
+  {"query":"How did Acme work with Northstar?","strategy":"graph_local","expected_source":"acme-launch.md","expected_entities":["Acme","Northstar Supplies"],"expected_relation":{"source_entity":"Acme","relation_type":"partnered_with","target_entity":"Northstar Supplies"}}
+]

@@ -3,3 +3,5 @@ models/
 out/
 __pycache__/
 .venv/
+/ingestion-service
+/ingestion-service.exe
