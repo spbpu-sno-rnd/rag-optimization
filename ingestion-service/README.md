@@ -1,107 +1,229 @@
-# Ingestion service
+# Сервис подготовки данных (ingestion)
 
-This Go service rebuilds the indexes consumed by `retrieval-service` and serves `POST /v1/query-context` on port 8081. It reads UTF-8 `.txt`, `.md`, and `.markdown` files. The output JSONL follows [the shared data contract](../retrieval-service/docs/data-contract.md). The first version runs a full rebuild while retrieval is stopped.
+Сервис на Go подготавливает документы для `retrieval-service`, загружает их во векторное и графовое хранилища и обрабатывает поисковые запросы через `POST /v1/query-context` на порту `8081`.
 
-## Dependencies
+Поддерживаются файлы `.txt`, `.md` и `.markdown` в кодировке UTF-8. Документы разбиваются на фрагменты (чанки), для которых вычисляются эмбеддинги и извлекаются сущности и направленные связи. Выходной JSONL соответствует [общему контракту данных](../retrieval-service/docs/data-contract.md).
 
-- Go 1.26 or newer.
-- Python 3.12, with packages from `model-worker/requirements.txt`.
-- Hugging Face `hf` CLI, installed by `model-worker/requirements.txt`. The model download is pinned to `intfloat/multilingual-e5-small` commit `614241f622f53c4eeff9890bdc4f31cfecc418b3`.
-- Ollama with `qwen2.5:3b` for entity and directed relation extraction. The extraction model can be changed with `OLLAMA_MODEL`. The model returns structured JSON; Go rejects unsupported relation endpoints and resolves only aliases declared in `corpus/aliases.json`. The small test corpus is English; extraction quality on other languages has not been established.
-- Docker Desktop with Compose to run Qdrant 1.13.6 and Neo4j 5.26 from `retrieval-service/docker-compose.yml`.
+В первой версии индексы пересоздаются полностью. На время пересборки `retrieval-service` должен быть остановлен.
 
-From this directory, install the Python packages in a virtual environment, then download the exact E5 revision into the Hugging Face cache:
+## Зависимости
+
+- Go версии 1.26 или новее.
+- Python 3.12 и пакеты из `model-worker/requirements.txt`.
+- Утилита Hugging Face `hf`, устанавливаемая вместе с указанными Python-пакетами.
+- Модель эмбеддингов `intfloat/multilingual-e5-small`, зафиксированная на ревизии `614241f622f53c4eeff9890bdc4f31cfecc418b3`.
+- Ollama с моделью `qwen2.5:3b` для извлечения сущностей и направленных связей. Другую модель можно указать через `OLLAMA_MODEL`.
+- Docker Desktop с Compose для запуска Qdrant 1.13.6 и Neo4j 5.26. Конфигурация находится в `retrieval-service/docker-compose.yml`.
+
+Модель извлечения возвращает структурированный JSON. Сервис отбрасывает связи, названия участников которых не встречаются в исходном фрагменте, и обрабатывает известные варианты названий по словарю `corpus/aliases.json`.
+
+Тестовый корпус небольшой и англоязычный. Качество извлечения на других языках пока не установлено.
+
+## Локальный запуск в Windows
+
+Команды ниже рассчитаны на PowerShell. Каждый новый терминал открывайте из корня репозитория `rag-optimization`.
+
+### 1. Установка Python-пакетов и скачивание E5
+
+В первом терминале перейдите в папку сервиса, создайте виртуальное окружение и установите зависимости:
 
 ```powershell
+cd ingestion-service
 py -3.12 -m venv .venv
 .\.venv\Scripts\python -m pip install -r model-worker\requirements.txt
+```
+
+Скачайте необходимые файлы зафиксированной ревизии модели:
+
+```powershell
 .\.venv\Scripts\hf download intfloat/multilingual-e5-small config.json model.safetensors tokenizer.json tokenizer_config.json special_tokens_map.json sentencepiece.bpe.model --revision 614241f622f53c4eeff9890bdc4f31cfecc418b3
 ```
 
-Set `HF_HOME` before both `hf download` and model worker startup if you want a non-default cache. The worker loads this revision from the local cache only, with no runtime model download. Do not commit downloaded model files.
+Если нужен нестандартный каталог кеша, задайте `HF_HOME` перед скачиванием и перед запуском обработчика E5. Значение должно быть одинаковым в обоих случаях.
 
-Start Qdrant and Neo4j from the retrieval directory:
+Обработчик загружает модель только из локального кеша. При запуске он не скачивает отсутствующие файлы. Файлы модели не должны попадать в Git.
+
+### 2. Запуск Qdrant и Neo4j
+
+В новом терминале из корня репозитория выполните:
 
 ```powershell
-cd ..\retrieval-service
-Copy-Item .env.example .env
+cd retrieval-service
+
+if (-not (Test-Path ".env")) {
+  Copy-Item .env.example .env
+}
+
 docker compose up -d
+docker compose ps
 ```
 
-Start Ollama in a separate terminal, or use its background app, then pull the extraction model:
+Дождитесь запуска обеих баз.
+
+В `.env.example` указан тестовый пароль `local-dev-password`. Если вы изменили его в `.env`, используйте тот же пароль в переменной `NEO4J_PASSWORD` при запуске Go-сервисов.
+
+Файл `.env` используется Docker Compose. Go-сервисы не загружают его автоматически. Пароли и ключи, включая `NEO4J_PASSWORD` и `QDRANT_API_KEY`, передаются через переменные окружения процесса. Файл `.env` исключён из Git.
+
+### 3. Подготовка Ollama
+
+Запустите приложение Ollama или его сервер в отдельном терминале:
 
 ```powershell
 ollama serve
 ```
 
+Если Ollama уже работает в фоновом режиме, повторно запускать сервер не нужно.
+
+В другом терминале скачайте модель извлечения:
+
 ```powershell
 ollama pull qwen2.5:3b
 ```
 
-If Ollama already runs as a background service, skip `ollama serve`. Set the Neo4j password in the Go process environment. Secrets such as `NEO4J_PASSWORD` and `QDRANT_API_KEY` are read only from environment variables. The `.env` file is for Compose and is ignored by Git.
+### 4. Запуск обработчика E5
+
+В новом терминале из корня репозитория выполните:
 
 ```powershell
-cd ..\ingestion-service
-$env:NEO4J_PASSWORD = 'local-dev-password'
+cd ingestion-service
 .\.venv\Scripts\python model-worker\server.py
 ```
 
-In another terminal, check the loaded E5 model with `.\.venv\Scripts\python scripts\check_model.py`.
+Оставьте терминал открытым. По умолчанию обработчик принимает запросы на `http://127.0.0.1:8082`.
 
-In another terminal with the same `NEO4J_PASSWORD` value, rebuild while retrieval is **stopped**:
+### 5. Пересборка индексов и запуск ingestion
+
+Убедитесь, что `retrieval-service` остановлен. В новом терминале из корня репозитория выполните:
 
 ```powershell
 cd ingestion-service
-$env:NEO4J_PASSWORD = 'local-dev-password'
+$env:NEO4J_PASSWORD = "local-dev-password"
+
+.\.venv\Scripts\python scripts\check_model.py
+```
+
+После успешной проверки E5 запустите пересборку:
+
+```powershell
 go run . rebuild --input corpus out/chunks.jsonl
+```
+
+Сервис подготавливает чанки, эмбеддинги и связи, проверяет идентификаторы подтверждающих фрагментов и записывает JSONL. Перед изменением хранилищ он повторно проверяет, что TCP-порт retrieval закрыт. Затем пересоздаёт коллекцию Qdrant с векторами размерности 384 и метрикой cosine, очищает граф и загружает данные в оба хранилища.
+
+**Пересборка удаляет прежнюю коллекцию Qdrant, а также узлы с метками `Entity`, `Document` и `Chunk` в настроенной базе Neo4j. Используйте отдельное тестовое хранилище.**
+
+Если пересборка завершилась ошибкой, индексы могут остаться заполненными частично. Держите retrieval остановленным, устраните причину ошибки и повторите пересборку.
+
+После успешной пересборки запустите HTTP-сервис в том же терминале:
+
+```powershell
 go run . serve
 ```
 
-The rebuild first prepares all chunks, embeddings and relations, validates evidence IDs, and writes the JSONL. It then checks that the retrieval TCP port is closed, recreates the 384-dimensional cosine Qdrant collection, clears the ingestion graph labels, and reloads both stores. A failed rebuild can leave partial indexes; keep retrieval stopped and run the rebuild again. The graph clear affects `Entity`, `Document` and `Chunk` nodes in the configured Neo4j database, so use a dedicated database.
+Оставьте терминал открытым. По умолчанию ingestion доступен на `http://127.0.0.1:8081`.
 
-Finally start retrieval in a separate terminal:
+### 6. Запуск retrieval
+
+В новом терминале из корня репозитория выполните:
 
 ```powershell
 cd retrieval-service
-$env:NEO4J_PASSWORD = 'local-dev-password'
-$env:INGESTION_TIMEOUT = '50s'
+$env:NEO4J_PASSWORD = "local-dev-password"
+$env:INGESTION_TIMEOUT = "50s"
+
 go run .\cmd\server
 ```
 
-Run the corpus checks with both services running:
+Оставьте терминал открытым. По умолчанию retrieval доступен на `http://127.0.0.1:8080`.
+
+### 7. Проверка всей связки
+
+Когда оба сервиса работают, откройте новый терминал из корня репозитория:
 
 ```powershell
 cd ingestion-service
+
+Invoke-RestMethod http://127.0.0.1:8081/healthz
+Invoke-RestMethod http://127.0.0.1:8080/healthz
+
 .\.venv\Scripts\python scripts\check_e2e.py
+```
+
+Запросы к `healthz` проверяют, что HTTP-процессы запущены. Они не подтверждают доступность моделей и баз.
+
+Сценарий `check_e2e.py` проверяет стратегии `vector`, `graph_local` и `hybrid` на тестовом корпусе. Он предполагает, что корпус уже загружен в обе базы. Ожидаемые результаты находятся в `corpus/expected-queries.json`.
+
+Результаты извлечения связей могут различаться. Если проверка не прошла, сопоставьте ожидаемую связь с фактическими `graph_facts` и подтверждающими чанками, прежде чем менять тестовые ожидания.
+
+## Тесты
+
+Из папки `ingestion-service`:
+
+```powershell
 go test ./...
+go vet ./...
+```
+
+Для тестов с настоящей E5 сначала запустите обработчик модели на порту `8082`, затем выполните:
+
+```powershell
 go test -tags integration ./...
 ```
 
-The corpus cases exercise `vector`, `graph_local`, and `hybrid` searches. Results from the extraction model can vary, so inspect any failed expectation against the returned graph facts and source chunks before changing the corpus.
+**В этих integration-тестах используется настоящая E5, но Ollama заменена тестовым HTTP-сервером.** Они не проверяют извлечение реальной моделью и запись в работающие Qdrant и Neo4j. Для проверки всей связки нужен отдельный E2E-сценарий.
 
-## Configuration
+## Настройки
 
-| Variable | Default | Purpose |
+| Переменная | По умолчанию | Назначение |
 |---|---|---|
-| `INGESTION_ADDR` | `:8081` | Query-context listener |
-| `MODEL_URL` | `http://127.0.0.1:8082` | Local E5 worker |
-| `MODEL_PORT` | `8082` | E5 worker listen port |
-| `HF_HOME` | Hugging Face default | Shared model cache |
-| `TORCH_NUM_THREADS` | `2` | CPU inference threads |
-| `OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama endpoint |
-| `OLLAMA_MODEL` | `qwen2.5:3b` | Extraction model |
-| `CHUNK_MAX_TOKENS` | `384` | Maximum total tokenizer tokens including `passage: ` and special tokens; range 16–512 |
-| `MAX_MODEL_REQUESTS` | `2` | Maximum simultaneous model HTTP requests; range 1–32 |
-| `ALIASES_FILE` | `corpus/aliases.json` | Explicit canonical names and aliases |
-| `QDRANT_URL` | `http://127.0.0.1:6333` | Qdrant REST endpoint |
-| `QDRANT_COLLECTION` | `documents` | Rebuilt collection |
-| `QDRANT_API_KEY` | unset | Optional Qdrant secret |
-| `NEO4J_URI` | `bolt://127.0.0.1:7687` | Neo4j Bolt endpoint |
-| `NEO4J_USERNAME` | `neo4j` | Neo4j user |
-| `NEO4J_PASSWORD` | required | Neo4j secret |
-| `NEO4J_DATABASE` | `neo4j` | Dedicated graph database |
-| `RETRIEVAL_URL` | `http://127.0.0.1:8080` | Search stop check and end-to-end script |
+| `INGESTION_ADDR` | `:8081` | Адрес HTTP-сервиса ingestion |
+| `MODEL_URL` | `http://127.0.0.1:8082` | Адрес обработчика E5 |
+| `MODEL_PORT` | `8082` | Порт обработчика E5 |
+| `HF_HOME` | Стандартный каталог Hugging Face | Общий кеш файлов модели |
+| `TORCH_NUM_THREADS` | `2` | Число потоков CPU для вычисления эмбеддингов |
+| `OLLAMA_URL` | `http://127.0.0.1:11434` | Адрес Ollama |
+| `OLLAMA_MODEL` | `qwen2.5:3b` | Модель извлечения сущностей и связей |
+| `CHUNK_MAX_TOKENS` | `384` | Максимальное число токенов чанка с учётом `passage: ` и специальных токенов; допустимо 16–512 |
+| `MAX_MODEL_REQUESTS` | `2` | Максимальное число одновременных HTTP-запросов к моделям; допустимо 1–32 |
+| `ALIASES_FILE` | `corpus/aliases.json` | Словарь основных названий сущностей и их вариантов |
+| `QDRANT_URL` | `http://127.0.0.1:6333` | Адрес REST API Qdrant |
+| `QDRANT_COLLECTION` | `documents` | Имя пересоздаваемой коллекции |
+| `QDRANT_API_KEY` | Не задана | Необязательный ключ доступа к Qdrant |
+| `NEO4J_URI` | `bolt://127.0.0.1:7687` | Адрес Bolt API Neo4j |
+| `NEO4J_USERNAME` | `neo4j` | Пользователь Neo4j |
+| `NEO4J_PASSWORD` | Обязательна | Пароль Neo4j |
+| `NEO4J_DATABASE` | `neo4j` | Имя базы Neo4j для графа проекта |
+| `RETRIEVAL_URL` | `http://127.0.0.1:8080` | Адрес retrieval для проверки остановки и E2E-сценария |
 
-`POST /v1/query-context` accepts one JSON object `{"query":"..."}` (up to 1 MiB) and returns `{"embedding":[384 numbers],"entities":[...]}`. Bad requests receive `400`. Embedding, tokenizer, or entity extraction failures receive `503`; successful extraction with no entities returns `[]`. `GET /healthz` is a process liveness check.
+## API контекста запроса
 
-The model worker uses mean pooling over attention-masked token embeddings and L2 normalization. Both query and passage vectors come from the same pinned revision. Qdrant also normalizes vectors for cosine search.
+### POST /v1/query-context
+
+Принимает один JSON-объект. Максимальный размер тела запроса — 1 МиБ:
+
+```json
+{"query":"How did Acme work with Northstar?"}
+```
+
+Успешный ответ содержит два поля:
+
+- `embedding` — массив из 384 числовых значений;
+- `entities` — массив строк с основными именами сущностей, например `["Acme", "Northstar Supplies"]`.
+
+- `200` — запрос обработан. При успешном извлечении без найденных сущностей возвращается `"entities": []`.
+- `400` — некорректный запрос.
+- `503` — ошибка токенизации, вычисления эмбеддинга или извлечения сущностей.
+
+### GET /healthz
+
+Проверяет, что HTTP-процесс ingestion работает. Это проверка жизнеспособности процесса, а не готовности его зависимостей.
+
+## Вычисление эмбеддингов
+
+Обработчик E5 усредняет представления токенов с учётом маски внимания и выполняет L2-нормализацию. Для документов и запросов используется одна зафиксированная ревизия модели:
+
+- `passage: ` — для фрагментов документов;
+- `query: ` — для поисковых запросов.
+
+Размерность вектора — 384. При cosine-поиске Qdrant также нормализует векторы.
+
