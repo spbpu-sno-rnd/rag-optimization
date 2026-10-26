@@ -1,0 +1,60 @@
+services:
+  model-worker:
+    image: python:3.12-slim
+    working_dir: /app
+    command: >-
+      sh -c "pip install --no-cache-dir -r model-worker/requirements.txt &&
+      python model-worker/server.py"
+    ports:
+      - "127.0.0.1:8082:8082"
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      MODEL_PORT: "8082"
+      TORCH_NUM_THREADS: ${TORCH_NUM_THREADS:-2}
+    volumes:
+      - ./:/app
+      - huggingface_cache:/root/.cache/huggingface
+    restart: unless-stopped
+
+  ingestion:
+    image: golang:1.26
+    working_dir: /app
+    command: go run . serve
+    ports:
+      - "127.0.0.1:8081:8081"
+    environment:
+      INGESTION_ADDR: ":8081"
+      MODEL_URL: http://model-worker:8082
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-documents}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USERNAME: ${NEO4J_USERNAME:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-local-dev-password}
+      NEO4J_DATABASE: ${NEO4J_DATABASE:-neo4j}
+      ALIASES_FILE: /app/corpus/aliases.json
+      RETRIEVAL_URL: ${RETRIEVAL_URL:-http://host.docker.internal:8080}
+      CHUNK_MAX_TOKENS: ${CHUNK_MAX_TOKENS:-384}
+      MAX_MODEL_REQUESTS: ${MAX_MODEL_REQUESTS:-2}
+    volumes:
+      - ./:/app
+      - go_cache:/go
+    depends_on:
+      - model-worker
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - default
+      - retrieval
+    restart: unless-stopped
+
+volumes:
+  huggingface_cache:
+  go_cache:
+
+networks:
+  retrieval:
+    external: true
+    name: retrieval-service_default
