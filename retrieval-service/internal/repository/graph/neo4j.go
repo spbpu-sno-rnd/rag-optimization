@@ -13,10 +13,12 @@ import (
 const localSearchQuery = `
 MATCH (seed:Entity)
 WHERE any(name IN $entities WHERE toLower(seed.name) = toLower(name))
-MATCH path = (seed)-[:RELATED_TO*1..2]-(entity:Entity)
+MATCH path = (seed)-[:RELATED_TO*1..2]-()
 WHERE length(path) <= $depth
-UNWIND relationships(path) AS relation
-WITH relation, startNode(relation) AS source, endNode(relation) AS target, min(length(path)) AS distance
+WITH seed, relationships(path) AS pathRelations
+UNWIND range(0, size(pathRelations) - 1) AS hopIndex
+WITH pathRelations[hopIndex] AS relation, hopIndex + 1 AS distance
+WITH relation, startNode(relation) AS source, endNode(relation) AS target, min(distance) AS distance
 WITH source, target, relation, distance, coalesce(relation.source_chunk_ids, []) AS source_chunk_ids
 WHERE relation.relation_type IS NOT NULL AND size(source_chunk_ids) > 0
 UNWIND source_chunk_ids AS evidence_id
