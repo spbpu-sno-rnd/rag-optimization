@@ -58,7 +58,7 @@ Successful response (`200 OK`):
 }
 ```
 
-`results` contains retrieved chunks. Graph search includes only evidence chunks referenced by `source_chunk_ids` on the traversed relationships; hybrid results fuse these with vector results by chunk ID. `graph_facts` contains the traversed, evidence-backed relationships and their supporting chunk IDs. `distance` is the shortest number of graph hops from a matched query entity to that relationship.
+`results` contains retrieved chunks. Graph search includes only evidence chunks referenced by `source_chunk_ids` on the traversed relationships; hybrid results fuse these with vector results by chunk ID. In hybrid responses, `graph_facts` only includes facts with at least one supporting chunk in the final `results`, and each fact's `source_chunk_ids` is limited to those returned chunks. `distance` is the shortest number of graph hops from a matched query entity to that relationship.
 
 `score` is strategy-dependent: vector search returns the vector store score, graph search ranks evidence by relationship distance, and hybrid search returns the Reciprocal Rank Fusion score. Scores from different strategies are not directly comparable. `sources` identifies which retrieval paths contributed the result.
 

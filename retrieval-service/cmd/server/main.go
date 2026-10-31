@@ -44,11 +44,8 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("configure Qdrant: %w", err)
 	}
-	if err := qdrant.CheckCollection(startupCtx); err != nil {
-		return fmt.Errorf("verify Qdrant collection: %w", err)
-	}
 
-	neo4jClient, err := graph.NewNeo4j(startupCtx, cfg.Neo4jURI, cfg.Neo4jUsername, cfg.Neo4jPassword, cfg.Neo4jDatabase)
+	neo4jClient, err := graph.NewNeo4j(cfg.Neo4jURI, cfg.Neo4jUsername, cfg.Neo4jPassword, cfg.Neo4jDatabase)
 	if err != nil {
 		return err
 	}
@@ -59,6 +56,26 @@ func run(logger *slog.Logger) error {
 			logger.Error("close Neo4j driver", "error", err)
 		}
 	}()
+
+	type dependencyCheck struct {
+		name string
+		err  error
+	}
+	checks := make(chan dependencyCheck, 2)
+	go func() {
+		checks <- dependencyCheck{name: "Qdrant", err: qdrant.CheckCollection(startupCtx)}
+	}()
+	go func() {
+		checks <- dependencyCheck{name: "Neo4j", err: neo4jClient.CheckConnectivity(startupCtx)}
+	}()
+	for range 2 {
+		check := <-checks
+		if check.err != nil {
+			logger.WarnContext(ctx, "retrieval dependency unavailable at startup; hybrid requests may return partial results",
+				"dependency", check.name, "error", check.err)
+		}
+	}
+	cancelStartup()
 
 	ingestionClient, err := ingestion.NewClient(
 		cfg.IngestionURL,

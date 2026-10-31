@@ -59,4 +59,4 @@ Copy-Item .env.example .env
 docker compose up -d
 ```
 
-The Neo4j credentials in the example are for local development only. The `.env` file is used by Compose; Go does not load `.env` automatically. When running the Go server locally, set `NEO4J_PASSWORD` in the process environment as well. The retrieval server starts after the configured Qdrant collection and Neo4j are reachable.
+The Neo4j credentials in the example are for local development only. The `.env` file is used by Compose; Go does not load `.env` automatically. When running the Go server locally, set `NEO4J_PASSWORD` in the process environment as well. The retrieval server checks Qdrant and Neo4j at startup and logs a warning if either dependency is unavailable, but still starts so hybrid requests can return partial results from the available source. `GET /healthz` is a liveness check; inspect per-source statuses in search responses to determine dependency availability.

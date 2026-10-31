@@ -122,6 +122,49 @@ func TestSearchHybridFusesRankings(t *testing.T) {
 	}
 }
 
+func TestHybridGraphFactsOnlyReferenceReturnedEvidence(t *testing.T) {
+	service := newTestUseCase(
+		t,
+		testProcessor{data: QueryData{Embedding: testEmbedding(), Entities: []string{"Acme"}}},
+		testVectorSearcher{results: []domain.SearchResult{
+			{ID: "shared", Text: "shared evidence"},
+			{ID: "a-vector", Text: "vector result"},
+		}},
+		testGraphSearcher{results: domain.GraphSearchResults{
+			Chunks: []domain.SearchResult{
+				{ID: "shared", Text: "shared evidence"},
+				{ID: "z-graph", Text: "graph result"},
+			},
+			Facts: []domain.GraphFact{
+				{
+					SourceEntity: "Acme", RelationType: "partner_of", TargetEntity: "Supplier",
+					Distance: 1, EvidenceChunkIDs: []string{"shared", "z-graph"},
+				},
+				{
+					SourceEntity: "Acme", RelationType: "supplies", TargetEntity: "Device",
+					Distance: 1, EvidenceChunkIDs: []string{"z-graph"},
+				},
+			},
+		}},
+	)
+
+	got, err := service.Search(context.Background(), SearchRequest{
+		Query: "question", Strategy: StrategyHybrid, Limit: 2, GraphDepth: 1,
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(got.Results) != 2 || got.Results[0].ID != "shared" {
+		t.Fatalf("results = %#v, want shared evidence in the top two", got.Results)
+	}
+	if len(got.GraphFacts) != 1 {
+		t.Fatalf("graph facts = %#v, want only the fact with returned evidence", got.GraphFacts)
+	}
+	if !reflect.DeepEqual(got.GraphFacts[0].EvidenceChunkIDs, []string{"shared"}) {
+		t.Fatalf("fact evidence IDs = %#v, want only returned chunk IDs", got.GraphFacts[0].EvidenceChunkIDs)
+	}
+}
+
 func TestSearchRejectsInvalidRequest(t *testing.T) {
 	service := newTestUseCase(t, testProcessor{}, testVectorSearcher{}, testGraphSearcher{})
 	tests := []SearchRequest{

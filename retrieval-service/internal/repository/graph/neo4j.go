@@ -36,7 +36,7 @@ type Neo4j struct {
 	database string
 }
 
-func NewNeo4j(ctx context.Context, uri, username, password, database string) (*Neo4j, error) {
+func NewNeo4j(uri, username, password, database string) (*Neo4j, error) {
 	if strings.TrimSpace(uri) == "" || strings.TrimSpace(database) == "" {
 		return nil, fmt.Errorf("Neo4j URI and database must not be empty")
 	}
@@ -44,14 +44,14 @@ func NewNeo4j(ctx context.Context, uri, username, password, database string) (*N
 	if err != nil {
 		return nil, fmt.Errorf("create Neo4j driver: %w", err)
 	}
-	if err := driver.VerifyConnectivity(ctx); err != nil {
-		closeErr := driver.Close(ctx)
-		if closeErr != nil {
-			return nil, fmt.Errorf("verify Neo4j connectivity: %w (close driver: %v)", err, closeErr)
-		}
-		return nil, fmt.Errorf("verify Neo4j connectivity: %w", err)
-	}
 	return &Neo4j{driver: driver, database: database}, nil
+}
+
+func (n *Neo4j) CheckConnectivity(ctx context.Context) error {
+	if err := n.driver.VerifyConnectivity(ctx); err != nil {
+		return fmt.Errorf("verify Neo4j connectivity: %w", err)
+	}
+	return nil
 }
 
 func (n *Neo4j) Search(ctx context.Context, entities []string, depth, limit int) (domain.GraphSearchResults, error) {

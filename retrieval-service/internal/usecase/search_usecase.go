@@ -222,14 +222,49 @@ func (u *SearchUseCase) hybridSearch(ctx context.Context, request SearchRequest)
 		return domain.SearchResponse{}, fmt.Errorf("hybrid search failed: %w", errors.Join(vectorErr, graphErr))
 	}
 
+	results := reciprocalRankFusion(vectorResults, graphResults, request.Limit)
+	graphFacts = filterGraphFactsToResults(graphFacts, results)
+
 	response := domain.SearchResponse{
-		Results:      reciprocalRankFusion(vectorResults, graphResults, request.Limit),
+		Results:      results,
 		GraphFacts:   graphFacts,
 		Partial:      vectorErr != nil || graphErr != nil,
 		VectorStatus: searchStatus(vectorErr, true),
 		GraphStatus:  searchStatus(graphErr, len(queryData.Entities) > 0),
 	}
 	return response, nil
+}
+
+func filterGraphFactsToResults(facts []domain.GraphFact, results []domain.SearchResult) []domain.GraphFact {
+	resultIDs := make(map[string]struct{}, len(results))
+	for _, result := range results {
+		resultIDs[result.ID] = struct{}{}
+	}
+
+	filtered := make([]domain.GraphFact, 0, len(facts))
+	for _, fact := range facts {
+		evidenceIDs := make([]string, 0, len(fact.EvidenceChunkIDs))
+		for _, id := range fact.EvidenceChunkIDs {
+			if _, found := resultIDs[id]; found && !containsEvidenceID(evidenceIDs, id) {
+				evidenceIDs = append(evidenceIDs, id)
+			}
+		}
+		if len(evidenceIDs) == 0 {
+			continue
+		}
+		fact.EvidenceChunkIDs = evidenceIDs
+		filtered = append(filtered, fact)
+	}
+	return filtered
+}
+
+func containsEvidenceID(ids []string, id string) bool {
+	for _, existing := range ids {
+		if existing == id {
+			return true
+		}
+	}
+	return false
 }
 
 func searchStatus(err error, attempted bool) string {
