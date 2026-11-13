@@ -23,10 +23,11 @@ type Handler struct {
 }
 
 type searchRequest struct {
-	Query      string           `json:"query"`
-	Strategy   usecase.Strategy `json:"strategy,omitempty"`
-	Limit      int              `json:"limit,omitempty"`
-	GraphDepth int              `json:"graph_depth,omitempty"`
+	GenerateAnswer bool             `json:"generate_answer,omitempty"`
+	Query          string           `json:"query"`
+	Strategy       usecase.Strategy `json:"strategy,omitempty"`
+	Limit          int              `json:"limit,omitempty"`
+	GraphDepth     int              `json:"graph_depth,omitempty"`
 }
 
 type errorResponse struct {
@@ -66,10 +67,11 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results, err := h.searcher.Search(r.Context(), usecase.SearchRequest{
-		Query:      body.Query,
-		Strategy:   body.Strategy,
-		Limit:      body.Limit,
-		GraphDepth: body.GraphDepth,
+		GenerateAnswer: body.GenerateAnswer,
+		Query:          body.Query,
+		Strategy:       body.Strategy,
+		Limit:          body.Limit,
+		GraphDepth:     body.GraphDepth,
 	})
 	if err != nil {
 		if errors.Is(err, usecase.ErrInvalidRequest) {

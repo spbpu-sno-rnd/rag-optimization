@@ -27,6 +27,9 @@ func TestSearchHandlerUsesDefaultsAndReturnsResults(t *testing.T) {
 		if request.Strategy != usecase.StrategyHybrid || request.Limit != 5 || request.GraphDepth != 1 {
 			t.Errorf("request defaults = %+v", request)
 		}
+		if request.GenerateAnswer {
+			t.Error("legacy request enabled answer generation")
+		}
 		return domain.SearchResponse{
 			Results: []domain.SearchResult{{ID: "chunk-1", Text: "Found it"}},
 			GraphFacts: []domain.GraphFact{{
@@ -75,6 +78,7 @@ func TestSearchHandlerRejectsInvalidBody(t *testing.T) {
 		`{"query":`,
 		`{"query":"question","unexpected":true}`,
 		`{"query":"question"} {}`,
+		`{"query":"question","generate_answer":"yes"}`,
 	} {
 		request := httptest.NewRequest(http.MethodPost, "/v1/search", strings.NewReader(body))
 		response := httptest.NewRecorder()
@@ -82,6 +86,32 @@ func TestSearchHandlerRejectsInvalidBody(t *testing.T) {
 		if response.Code != http.StatusBadRequest {
 			t.Errorf("body %q status = %d, want %d", body, response.Code, http.StatusBadRequest)
 		}
+	}
+}
+
+func TestSearchHandlerForwardsAnswerRequest(t *testing.T) {
+	handler, err := NewHandler(searcherFunc(func(_ context.Context, request usecase.SearchRequest) (domain.SearchResponse, error) {
+		if !request.GenerateAnswer {
+			t.Error("answer generation was not requested")
+		}
+		return domain.SearchResponse{
+			Results: []domain.SearchResult{{ID: "a", Text: "Atlas supplied processors."}},
+			Answer: &domain.Answer{Status: domain.AnswerPartial, Text: "Atlas supplied processors. [1](#chunk-61)",
+				Facts: []domain.AnswerFact{{Text: "Atlas supplied processors.", Citations: []domain.Citation{{ChunkID: "a", Href: "#chunk-61"}}}}, Missing: []string{"Casings supplier"}},
+			Partial: true, VectorStatus: "ok", GraphStatus: "error",
+		}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	NewRouter(handler).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/search", strings.NewReader(`{"query":"Who supplied parts?","generate_answer":true}`)))
+	var got domain.SearchResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || got.Answer == nil || got.Answer.Status != domain.AnswerPartial || len(got.Answer.Facts) != 1 || got.Answer.Facts[0].Citations[0].ChunkID != "a" || !got.Partial || got.GraphStatus != "error" {
+		t.Fatalf("answer response = %d %s", response.Code, response.Body.String())
 	}
 }
 
