@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"retrieval-service/internal/client/ingestion"
+	"retrieval-service/internal/client/ollama"
 	"retrieval-service/internal/config"
 	deliveryhttp "retrieval-service/internal/delivery/http"
 	"retrieval-service/internal/repository/graph"
@@ -88,17 +89,17 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("configure search use case: %w", err)
 	}
-	handler, err := deliveryhttp.NewHandler(searchUseCase)
+	handler, err := newHTTPHandler(cfg, searchUseCase)
 	if err != nil {
 		return fmt.Errorf("configure HTTP handler: %w", err)
 	}
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           deliveryhttp.NewRouter(handler),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      60 * time.Second,
+		WriteTimeout:      searchWriteTimeout(cfg),
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
@@ -122,4 +123,31 @@ func run(logger *slog.Logger) error {
 		}
 		return nil
 	}
+}
+
+func newHTTPHandler(cfg config.Config, searcher usecase.Searcher) (http.Handler, error) {
+	generator, err := ollama.NewClient(cfg.OllamaURL, cfg.OllamaModel, &http.Client{Timeout: cfg.AnswerTimeout})
+	if err != nil {
+		return nil, fmt.Errorf("configure answer generator: %w", err)
+	}
+	answerUseCase, err := usecase.NewAnswerUseCase(searcher, generator)
+	if err != nil {
+		return nil, fmt.Errorf("configure answer use case: %w", err)
+	}
+	handler, err := deliveryhttp.NewHandler(answerUseCase)
+	if err != nil {
+		return nil, err
+	}
+	return deliveryhttp.NewRouter(handler), nil
+}
+
+func searchWriteTimeout(cfg config.Config) time.Duration {
+	timeout := 30 * time.Second
+	for _, budget := range []time.Duration{cfg.IngestionTimeout, cfg.AnswerTimeout} {
+		if budget > time.Duration(1<<63-1)-timeout {
+			return time.Duration(1<<63 - 1)
+		}
+		timeout += budget
+	}
+	return max(60*time.Second, timeout)
 }
