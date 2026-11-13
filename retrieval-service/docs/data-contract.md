@@ -50,6 +50,24 @@ The ingestion service returns both outputs from the same query. `embedding` is a
 
 This one call is performed for each retrieval request; in hybrid mode the resulting vector and graph searches then run concurrently.
 
+## Answer generation boundary
+
+When `generate_answer` is enabled, retrieval passes the original trimmed question and only the final, non-empty retrieved chunk IDs and texts to Ollama `POST /api/chat`. It does not pass unreturned graph evidence, filenames as IDs, metadata, or ingestion state. The existing query preparation and storage contracts above do not change.
+
+The answer model uses `stream: false`, `truncate: false`, `shift: false`, a JSON schema, `temperature: 0`, `num_ctx: 16384`, and a bounded output of 2048 tokens. Its untrusted draft has this structure:
+
+```json
+{"facts":[{"text":"Verbatim excerpt from a retrieved chunk.","chunk_ids":["chunk-id"]}],"missing":["Verbatim unanswered part of the question"]}
+```
+
+Both arrays and the two fact fields are required. Retrieval rejects malformed/null/unknown draft fields, incomplete generation, tool output, and responses larger than 1 MiB. Each `missing` item must literally occur in the question. Invalid items are replaced with a fixed diagnostic, never displayed as model-written assertions. Valid items are explicitly labeled as quotations from the question, not facts from documents.
+
+Serialized question/chunk context larger than 12 KiB fails generation rather than being truncated by this client. This conservative byte budget leaves room in the requested 16384-token Qwen window for the system prompt, chat template and 2048-token output. Overflow/truncation controls require a compatible Ollama daemon. A different model/tokenizer/template or an older daemon that ignores controls is outside this verified protocol: validate compatibility before changing the default model. The byte budget is not a general-purpose tokenizer.
+
+For each fact, retrieval checks that every cited ID is in the context and that the full fact text is literally present in every cited chunk. A fact with any invalid reference is dropped as a whole. Conflicting duplicate IDs are not usable evidence. Citation destinations and document IDs are built from the retrieved data, not accepted from the model. The resulting [answer contract](search-api.md#optional-grounded-answer) distinguishes incomplete evidence from operational generation failures.
+
+The server currently uses the same default model name as ingestion (`qwen2.5:3b`), with independent HTTP client timeout `ANSWER_TIMEOUT`. Ollama daemon version and model digest are not pinned by this repository. Its response envelope is decoded strictly; compatibility with other daemon/model versions must be checked before deployment.
+
 ## Local data services
 
 Copy `.env.example` to `.env` and start the databases:
