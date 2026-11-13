@@ -32,10 +32,11 @@ var (
 )
 
 type SearchRequest struct {
-	Query      string
-	Strategy   Strategy
-	Limit      int
-	GraphDepth int
+	GenerateAnswer bool
+	Query          string
+	Strategy       Strategy
+	Limit          int
+	GraphDepth     int
 }
 
 type QueryData struct {
