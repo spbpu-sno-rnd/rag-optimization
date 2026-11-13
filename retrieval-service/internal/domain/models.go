@@ -30,6 +30,7 @@ type GraphSearchResults struct {
 }
 
 type SearchResponse struct {
+	Answer       *Answer        `json:"answer,omitempty"`
 	Results      []SearchResult `json:"results"`
 	GraphFacts   []GraphFact    `json:"graph_facts"`
 	Partial      bool           `json:"partial"`
