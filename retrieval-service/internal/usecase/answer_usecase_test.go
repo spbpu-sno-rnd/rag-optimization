@@ -143,3 +143,19 @@ func TestAnswerUseCaseHonorsCancellation(t *testing.T) {
 		t.Fatalf("nil context = %v", err)
 	}
 }
+
+func TestAnswerUseCaseDoesNotAbstainWhenAllSearchPathsUnavailable(t *testing.T) {
+	uc, err := NewAnswerUseCase(answerSearchFunc(func(context.Context, SearchRequest) (domain.SearchResponse, error) {
+		return domain.SearchResponse{Results: []domain.SearchResult{}, Partial: true, VectorStatus: "error", GraphStatus: "skipped"}, nil
+	}), answerGeneratorFunc(func(context.Context, string, []domain.SearchResult) (domain.AnswerDraft, error) {
+		t.Fatal("unavailable retrieval called model")
+		return domain.AnswerDraft{}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := uc.Search(context.Background(), SearchRequest{GenerateAnswer: true})
+	if err != nil || got.Answer == nil || got.Answer.Status != domain.AnswerError || !got.Partial || got.VectorStatus != "error" || got.GraphStatus != "skipped" {
+		t.Fatalf("unavailable search reported insufficient data: %+v, %v", got, err)
+	}
+}

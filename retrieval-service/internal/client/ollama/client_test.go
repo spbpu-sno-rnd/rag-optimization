@@ -32,11 +32,14 @@ func TestGenerateSendsBoundedStructuredRequest(t *testing.T) {
 				Role    string `json:"role"`
 				Content string `json:"content"`
 			} `json:"messages"`
-			Stream  *bool          `json:"stream"`
-			Format  map[string]any `json:"format"`
-			Options struct {
+			Stream   *bool          `json:"stream"`
+			Truncate *bool          `json:"truncate"`
+			Shift    *bool          `json:"shift"`
+			Format   map[string]any `json:"format"`
+			Options  struct {
 				Temperature *float64 `json:"temperature"`
 				NumPredict  int      `json:"num_predict"`
+				NumCtx      int      `json:"num_ctx"`
 			} `json:"options"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -45,6 +48,9 @@ func TestGenerateSendsBoundedStructuredRequest(t *testing.T) {
 		}
 		if payload.Model != "qwen2.5:3b" || payload.Stream == nil || *payload.Stream || payload.Options.Temperature == nil || *payload.Options.Temperature != 0 || payload.Options.NumPredict != 2048 {
 			t.Errorf("unexpected generation options: %+v", payload)
+		}
+		if payload.Truncate == nil || *payload.Truncate || payload.Shift == nil || *payload.Shift || payload.Options.NumCtx != 16384 {
+			t.Errorf("context may silently truncate: %+v", payload)
 		}
 		if len(payload.Messages) != 2 || payload.Messages[0].Role != "system" || payload.Messages[1].Role != "user" {
 			t.Errorf("messages = %+v", payload.Messages)
@@ -261,9 +267,9 @@ func TestGenerateRejectsLargeContextBeforeRequest(t *testing.T) {
 		query  string
 		chunks []domain.SearchResult
 	}{
-		{query: strings.Repeat("q", 256<<10)},
-		{query: "q", chunks: []domain.SearchResult{{ID: "1", Text: strings.Repeat("x", 256<<10)}}},
-		{query: strings.Repeat("\n", 130<<10)},
+		{query: strings.Repeat("q", 13<<10)},
+		{query: "q", chunks: []domain.SearchResult{{ID: "1", Text: strings.Repeat("x", 13<<10)}}},
+		{query: strings.Repeat("\n", 7<<10)},
 	} {
 		if _, err := client.Generate(context.Background(), tc.query, tc.chunks); err == nil {
 			t.Fatal("expected oversized serialized context error")

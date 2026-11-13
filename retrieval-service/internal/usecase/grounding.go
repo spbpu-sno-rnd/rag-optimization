@@ -12,7 +12,7 @@ const insufficientDataText = "В доступных документах нед�
 
 // BuildGroundedAnswer accepts only verbatim facts supported by every referenced chunk.
 // Link targets are built locally; model-provided Markdown is always escaped.
-func BuildGroundedAnswer(draft domain.AnswerDraft, chunks []domain.SearchResult) domain.Answer {
+func BuildGroundedAnswer(query string, draft domain.AnswerDraft, chunks []domain.SearchResult) domain.Answer {
 	answer := domain.Answer{
 		Status: domain.AnswerInsufficientData, Text: insufficientDataText,
 		Facts: []domain.AnswerFact{}, Missing: []string{},
@@ -59,8 +59,13 @@ func BuildGroundedAnswer(draft domain.AnswerDraft, chunks []domain.SearchResult)
 		answer.Facts = append(answer.Facts, domain.AnswerFact{Text: text, Citations: citations})
 	}
 	seenMissing := make(map[string]bool)
+	invalidMissing := false
 	for _, missing := range draft.Missing {
 		missing = strings.TrimSpace(missing)
+		if missing != "" && !strings.Contains(query, missing) {
+			invalidMissing = true
+			continue
+		}
 		if missing != "" && !seenMissing[missing] {
 			answer.Missing = append(answer.Missing, missing)
 			seenMissing[missing] = true
@@ -68,6 +73,9 @@ func BuildGroundedAnswer(draft domain.AnswerDraft, chunks []domain.SearchResult)
 	}
 	if rejected {
 		answer.Missing = append(answer.Missing, "Не удалось подтвердить часть ответа по доступным фрагментам.")
+	}
+	if invalidMissing {
+		answer.Missing = append(answer.Missing, "Не удалось уточнить неподтверждённую часть вопроса.")
 	}
 	if len(answer.Facts) == 0 {
 		return answer
@@ -79,7 +87,7 @@ func BuildGroundedAnswer(draft domain.AnswerDraft, chunks []domain.SearchResult)
 	paragraphs := make([]string, 0, len(answer.Facts)+len(answer.Missing))
 	reference := 0
 	for _, fact := range answer.Facts {
-		paragraph := escapeMarkdown(fact.Text)
+		paragraph := escapeMarkdown(strings.Join(strings.Fields(fact.Text), " "))
 		for _, citation := range fact.Citations {
 			reference++
 			paragraph += fmt.Sprintf(" [%d](%s)", reference, citation.Href)
@@ -87,7 +95,12 @@ func BuildGroundedAnswer(draft domain.AnswerDraft, chunks []domain.SearchResult)
 		paragraphs = append(paragraphs, paragraph)
 	}
 	for _, missing := range answer.Missing {
-		paragraphs = append(paragraphs, "Недостаточно данных: "+escapeMarkdown(missing))
+		text := escapeMarkdown(strings.Join(strings.Fields(missing), " "))
+		if strings.Contains(query, missing) {
+			paragraphs = append(paragraphs, "Недостаточно данных по части вопроса «"+text+"».")
+		} else {
+			paragraphs = append(paragraphs, "Недостаточно данных: "+text)
+		}
 	}
 	answer.Text = strings.Join(paragraphs, "\n\n")
 	return answer

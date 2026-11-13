@@ -48,7 +48,11 @@ func (u *AnswerUseCase) Search(ctx context.Context, request SearchRequest) (doma
 		}
 	}
 	if len(chunks) == 0 {
-		answer := BuildGroundedAnswer(domain.AnswerDraft{}, nil)
+		if response.VectorStatus == "error" && response.GraphStatus != "ok" || response.GraphStatus == "error" && response.VectorStatus != "ok" {
+			response.Answer = generationErrorAnswer()
+			return response, nil
+		}
+		answer := BuildGroundedAnswer(request.Query, domain.AnswerDraft{}, nil)
 		response.Answer = &answer
 		return response, nil
 	}
@@ -58,14 +62,18 @@ func (u *AnswerUseCase) Search(ctx context.Context, request SearchRequest) (doma
 	}
 	if err != nil {
 		slog.WarnContext(ctx, "answer generation failed; returning retrieval results", "error", err)
-		response.Answer = &domain.Answer{
-			Status: domain.AnswerError,
-			Text:   "Не удалось сформировать ответ. Найденные фрагменты доступны в результатах поиска.",
-			Facts:  []domain.AnswerFact{}, Missing: []string{},
-		}
+		response.Answer = generationErrorAnswer()
 		return response, nil
 	}
-	answer := BuildGroundedAnswer(draft, chunks)
+	answer := BuildGroundedAnswer(request.Query, draft, chunks)
 	response.Answer = &answer
 	return response, nil
+}
+
+func generationErrorAnswer() *domain.Answer {
+	return &domain.Answer{
+		Status: domain.AnswerError,
+		Text:   "Не удалось сформировать ответ из-за ошибки сервиса. Доступные фрагменты приведены в результатах поиска.",
+		Facts:  []domain.AnswerFact{}, Missing: []string{},
+	}
 }

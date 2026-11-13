@@ -61,19 +61,20 @@ func TestAnswerHTTPIntegration(t *testing.T) {
 		rendered: `Acme Corporation partnered with Northstar Ltd to expand production of Aurora\. [1](#chunk-6c61756e63682dceb1)`,
 	}
 	tests := []struct {
-		name          string
-		query         string
-		sources       []answerIntegrationSource
-		draft         domain.AnswerDraft
-		modelError    bool
-		unfinished    bool
-		truncated     bool
-		legacy        bool
-		hybridPartial bool
-		wantStatus    domain.AnswerStatus
-		wantFacts     []answerIntegrationFact
-		wantMissing   string
-		wantCalls     int32
+		name                 string
+		query                string
+		sources              []answerIntegrationSource
+		draft                domain.AnswerDraft
+		modelError           bool
+		unfinished           bool
+		truncated            bool
+		legacy               bool
+		hybridPartial        bool
+		retrievalUnavailable bool
+		wantStatus           domain.AnswerStatus
+		wantFacts            []answerIntegrationFact
+		wantMissing          string
+		wantCalls            int32
 	}{
 		{
 			name: "one source with UTF8 chunk anchor", query: partnerQuery, sources: []answerIntegrationSource{launch},
@@ -101,12 +102,16 @@ func TestAnswerHTTPIntegration(t *testing.T) {
 		},
 		{
 			name: "irrelevant nearest chunk is not an answer", query: "Did Acme acquire Harbor Logistics in 2022?", sources: []answerIntegrationSource{cedar},
-			draft:      domain.AnswerDraft{Facts: []domain.DraftFact{}, Missing: []string{"Acme acquisition of Harbor Logistics in 2022"}},
-			wantStatus: domain.AnswerInsufficientData, wantMissing: "Acme acquisition of Harbor Logistics in 2022", wantCalls: 1,
+			draft:      domain.AnswerDraft{Facts: []domain.DraftFact{}, Missing: []string{"acquire Harbor Logistics in 2022"}},
+			wantStatus: domain.AnswerInsufficientData, wantMissing: "acquire Harbor Logistics in 2022", wantCalls: 1,
 		},
 		{
 			name: "empty retrieval bypasses model", query: partnerQuery,
 			wantStatus: domain.AnswerInsufficientData,
+		},
+		{
+			name: "all search paths unavailable is an operational error", query: partnerQuery,
+			retrievalUnavailable: true, wantStatus: domain.AnswerError,
 		},
 		{
 			name: "foreign evidence ID is filtered", query: partnerQuery, sources: []answerIntegrationSource{launch},
@@ -164,11 +169,19 @@ func TestAnswerHTTPIntegration(t *testing.T) {
 				}
 				embedding := make([]float32, 384)
 				embedding[0] = 1
-				writeJSON(w, http.StatusOK, map[string]any{"embedding": embedding, "entities": []string{"Acme"}})
+				entities := []string{"Acme"}
+				if test.retrievalUnavailable {
+					entities = []string{}
+				}
+				writeJSON(w, http.StatusOK, map[string]any{"embedding": embedding, "entities": entities})
 			}))
 			t.Cleanup(ingestionServer.Close)
 			qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				qdrantCalls.Add(1)
+				if test.retrievalUnavailable {
+					writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "fixture Qdrant unavailable"})
+					return
+				}
 				if r.Method != http.MethodPost || r.URL.Path != "/collections/documents/points/query" {
 					t.Errorf("Qdrant request = %s %s", r.Method, r.URL.Path)
 				}
@@ -251,7 +264,7 @@ func TestAnswerHTTPIntegration(t *testing.T) {
 			server := httptest.NewServer(NewRouter(handler))
 			t.Cleanup(server.Close)
 			strategy := "vector"
-			if test.hybridPartial {
+			if test.hybridPartial || test.retrievalUnavailable {
 				strategy = "hybrid"
 			}
 			request := map[string]any{"query": test.query, "strategy": strategy, "limit": 5, "graph_depth": 2}
@@ -282,10 +295,14 @@ func TestAnswerHTTPIntegration(t *testing.T) {
 				t.Errorf("calls ingestion/Qdrant/Ollama = %d/%d/%d, want 1/1/%d", ingestionCalls.Load(), qdrantCalls.Load(), modelCalls.Load(), test.wantCalls)
 			}
 			wantGraphStatus := "skipped"
+			wantVectorStatus := "ok"
+			if test.retrievalUnavailable {
+				wantVectorStatus = "error"
+			}
 			if test.hybridPartial {
 				wantGraphStatus = "error"
 			}
-			if got.Partial != test.hybridPartial || got.VectorStatus != "ok" || got.GraphStatus != wantGraphStatus || len(got.GraphFacts) != 0 {
+			if got.Partial != (test.hybridPartial || test.retrievalUnavailable) || got.VectorStatus != wantVectorStatus || got.GraphStatus != wantGraphStatus || len(got.GraphFacts) != 0 {
 				t.Errorf("retrieval statuses changed: partial=%v vector=%s graph=%s facts=%v", got.Partial, got.VectorStatus, got.GraphStatus, got.GraphFacts)
 			}
 			if len(got.Results) != len(chunks) {
