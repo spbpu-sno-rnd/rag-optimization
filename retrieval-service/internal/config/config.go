@@ -12,6 +12,9 @@ type Config struct {
 	HTTPAddr         string
 	IngestionURL     string
 	IngestionTimeout time.Duration
+	OllamaURL        string
+	OllamaModel      string
+	AnswerTimeout    time.Duration
 	QdrantURL        string
 	QdrantCollection string
 	QdrantAPIKey     string
@@ -25,6 +28,8 @@ func Load() (Config, error) {
 	cfg := Config{
 		HTTPAddr:         envOrDefault("HTTP_ADDR", ":8080"),
 		IngestionURL:     envOrDefault("INGESTION_URL", "http://localhost:8081"),
+		OllamaURL:        envOrDefault("OLLAMA_URL", "http://localhost:11434"),
+		OllamaModel:      envOrDefault("OLLAMA_MODEL", "qwen2.5:3b"),
 		QdrantURL:        envOrDefault("QDRANT_URL", "http://localhost:6333"),
 		QdrantCollection: envOrDefault("QDRANT_COLLECTION", "documents"),
 		QdrantAPIKey:     os.Getenv("QDRANT_API_KEY"),
@@ -39,6 +44,16 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("INGESTION_TIMEOUT must be a positive duration")
 	}
 	cfg.IngestionTimeout = timeout
+	answerTimeout, err := time.ParseDuration(envOrDefault("ANSWER_TIMEOUT", "40s"))
+	if err != nil || answerTimeout <= 0 {
+		return Config{}, fmt.Errorf("ANSWER_TIMEOUT must be a positive duration")
+	}
+	cfg.AnswerTimeout = answerTimeout
+
+	ollamaURL, err := url.Parse(cfg.OllamaURL)
+	if err != nil || (ollamaURL.Scheme != "http" && ollamaURL.Scheme != "https") || ollamaURL.Hostname() == "" || ollamaURL.User != nil || ollamaURL.RawQuery != "" || ollamaURL.ForceQuery || strings.Contains(cfg.OllamaURL, "#") {
+		return Config{}, fmt.Errorf("OLLAMA_URL must be an absolute HTTP(S) URL without credentials, query or fragment")
+	}
 
 	if cfg.Neo4jPassword == "" {
 		return Config{}, fmt.Errorf("NEO4J_PASSWORD must be set")
