@@ -1,0 +1,34 @@
+{
+  "Robert Vance": [
+    "Patient #8821",
+    "Robert Vance",
+    "Patient Vance"
+  ],
+  "Dr. Elena Rostova": [
+    "Dr. Rostova",
+    "Elena Rostova",
+    "Cardiologist Rostova"
+  ],
+  "Dr. Marcus Thorne": [
+    "Dr. Thorne",
+    "Marcus Thorne",
+    "Nephrologist Thorne"
+  ],
+  "City General Hospital": [
+    "City General",
+    "Hospital Cardiology Department"
+  ],
+  "Lisinopril": [
+    "Lisinopril 20mg",
+    "ACE inhibitor Lisinopril"
+  ],
+  "Chronic Kidney Disease": [
+    "CKD",
+    "CKD Stage III",
+    "chronic kidney disease"
+  ],
+  "Pharma Interactions Guide": [
+    "2024 Clinical Pharmacology Guide",
+    "Pharmacology Guide"
+  ]
+}
