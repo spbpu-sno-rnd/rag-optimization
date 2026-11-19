@@ -1,55 +1,107 @@
-# Pilot retrieval benchmark
+# Бенчмарк поиска
 
-This folder contains a small, deterministic, fictional corpus and a human-readable gold set for comparing `vector`, `graph_local`, and `hybrid` retrieval. The corpus and questions are separate from `ingestion-service`; the ingestion service can index this directory using its existing rebuild command.
+Каждый каталог в `datasets/` — отдельный корпус со своими `corpus/`, `aliases.json` и (если подготовлен) `queries.jsonl`. При пересборке индексов не смешивайте наборы данных: команда `rebuild` заменяет настроенную коллекцию Qdrant и удаляет из Neo4j узлы `Entity`, `Document` и `Chunk`.
 
-## Contents
+Актуальные результаты первого прогона и ограничения измерений собраны в [отчёте](./RESULTS.md).
 
-- `corpus/`: documents to ingest; each source is deliberately short so one file remains one chunk with the current chunking setup.
-- `corpus/aliases.json`: canonical names and known variants for this corpus.
-- `queries.jsonl`: one labeled question per line.
-- `validate_dataset.py`: offline structural validation of labels and corpus references.
+## Поддерживаемые форматы ingestion-сервиса
 
-The initial pilot has 13 questions: 4 single-hop, 4 multi-hop, 3 distractor/comparison, and 2 unanswerable. Cases are split into `dev` (7 cases) and `test` (6 cases), with all four categories represented in both. Use `dev` to tune retrieval settings and keep `test` untouched until reporting final results. The set is intended to expose retrieval behavior and integration issues, not to support statistically strong research claims. The current unanswerable cases are intended for later generation/abstention evaluation; retrieval systems may still return nearest-neighbor context for them.
+Сейчас `ingestion-service` читает UTF-8-файлы `.txt`, `.md` и `.markdown`. Остальные расширения при обходе корпуса он не обрабатывает. Самостоятельно извлекать текст из PDF, Word, PowerPoint или Excel сервис не умеет.
 
-Each query contains:
-
-| Field | Meaning |
-|---|---|
-| `id` | Stable case identifier |
-| `split` | `dev` for development or `test` for held-out checks |
-| `query` | User-facing test question |
-| `category` | `single_hop`, `multi_hop`, `distractor`, or `unanswerable` |
-| `answerable` | Whether the corpus supports an answer |
-| `expected_answer` | Reference answer for a future generation evaluation; `null` when unanswerable |
-| `expected_entities` | Canonical query entities expected from `POST /v1/query-context` |
-| `gold_evidence` | Source filenames containing the minimum evidence for the answer |
-| `required_facts` | Gold directed relation triples and the source document supporting each triple |
-
-Evidence uses source filenames, not chunk UUIDs: ingestion generates new UUIDs on every rebuild. At evaluation time, returned result metadata can be mapped to these stable source names. For an answer requiring multiple facts, every `required_facts` entry is expected evidence; source overlap alone is not sufficient to establish that the graph retrieved the complete reasoning path.
-
-## Validate the dataset
-
-From the repository root:
+Запустите проверку набора данных из корня репозитория:
 
 ```powershell
 py .\benchmark\validate_dataset.py
 ```
 
-This checks JSONL syntax, schema, unique case IDs, category coverage, canonical entity labels, and that every gold evidence reference points to an existing corpus file.
+Проверка перечисляет форматы источников, валидирует разметку и ссылки на доказательства, не читая содержимое документов. Для форматов, которые ingestion не поддерживает, она проверяет наличие подготовленного корпуса и корректного манифеста. Чтобы проверить один набор:
 
-## Index for a local integration run
+```powershell
+py .\benchmark\validate_dataset.py --dataset 01_pilot_acme
+```
 
-**Warning:** ingestion's `rebuild` command replaces the Qdrant collection and clears the configured Neo4j `Entity`, `Document`, and `Chunk` nodes. Use a disposable local database or back up data first. Stop retrieval before rebuilding.
+`01_pilot_acme` содержит только Markdown-файлы и готов к индексации без предварительной конвертации. В finance, medical и legal используются также `.xlsx`, `.docx`, `.pdf` и/или `.pptx`.
 
-With Qdrant and Neo4j running and the E5 worker and Ollama available, from the repository root:
+## Извлечение текста из Office и PDF
+
+`ingestion-service` при подготовке не меняется. Инструмент этого бенчмарка извлекает текст из распространённых форматов в UTF-8 Markdown и создаёт манифест соответствия между подготовленными файлами и оригиналами. Манифест нужен, потому что эталонная разметка ссылается на исходные имена файлов.
+
+Установите необязательные зависимости извлечения в локальное виртуальное окружение Python:
+
+```powershell
+.\ingestion-service\.venv\Scripts\python -m pip install -r .\benchmark\requirements.txt
+```
+
+Подготовьте набор, не изменяя оригиналы:
+
+```powershell
+.\ingestion-service\.venv\Scripts\python .\benchmark\prepare_corpus.py 04_legal_contracts
+```
+
+По умолчанию результат записывается в `ingestion-service/out/benchmark/<dataset>/corpus`, манифест — рядом. Скрипт отказывается перезаписывать существующий каталог. Перед индексацией проверьте извлечённый текст.
+
+Ограничения конвертации:
+
+- PDF: извлекается только выделяемый текст; для сканов нужен OCR. Если текст извлечь нельзя, скрипт сообщает об ошибке.
+- PowerPoint: читаются текст и таблицы слайдов, но не текст на изображениях.
+- Excel: читаются значения ячеек и формулы, но не диаграммы и макросы.
+
+Учитывайте эти ограничения при интерпретации результатов.
+
+**Конфиденциальность:** в `03_medical_records` есть файл `Patient_Card_8821.pdf`. Перед извлечением или индексацией убедитесь, что данные синтетические или надлежащим образом обезличены и что их обработка разрешена. Инвентаризация и проверка разметки намеренно не открывают исходные документы.
+
+## Эталонная разметка
+
+В `queries.jsonl` хранится по одному JSON-объекту на строку:
+
+- `id`, `split` (`dev` или `test`), `query`, `category`;
+- `answerable` и `expected_answer`;
+- `expected_entities` — канонические имена сущностей, ожидаемые при обработке запроса;
+- `gold_evidence` — имена файлов с минимально необходимыми доказательствами;
+- `required_facts` — направленные тройки и документ, подтверждающий каждую связь.
+
+В эталоне используются имена файлов, поскольку UUID чанков создаются заново при каждой индексации. При оценке результаты нужно сопоставлять с этими стабильными именами через метаданные и манифест. Для многошаговых запросов одного совпадения источников недостаточно: нужно проверять все необходимые факты и доказательства.
+
+## Индексация набора данных
+
+**Внимание:** `rebuild` разрушительно пересоздаёт настроенные локальные индексы. Используйте отдельные тестовые базы или заранее сохраните нужные данные и остановите retrieval.
+
+Перед запуском подготовьте корпус и проверьте извлечённый текст, словарь псевдонимов и эталонную разметку. Qdrant, Neo4j, E5 worker и Ollama должны работать.
+
+Для Markdown-набора `01_pilot_acme` из корня репозитория:
 
 ```powershell
 cd ingestion-service
 $env:NEO4J_PASSWORD = "local-dev-password"
-$env:ALIASES_FILE = "..\benchmark\corpus\aliases.json"
-go run . rebuild --input ..\benchmark\corpus ..\ingestion-service\out\benchmark-chunks.jsonl
+$env:ALIASES_FILE = "..\benchmark\datasets\01_pilot_acme\corpus\aliases.json"
+go run . rebuild --input ..\benchmark\datasets\01_pilot_acme\corpus ..\ingestion-service\out\benchmark-pilot-chunks.jsonl
 ```
 
-The rebuild output reports the number of extracted relations. Inspect that count and the resulting graph before starting retrieval; the gold facts are labels, not a guarantee that the extraction model has populated every relation.
+Для подготовленного набора с Office/PDF используйте подготовленный корпус и его словарь псевдонимов:
 
-After indexing, start ingestion and retrieval as usual, then query `POST /v1/search` with each case using each strategy. The offline validator does not call either service and does not compute retrieval or answer-quality metrics; that belongs to the evaluation stage.
+```powershell
+$env:ALIASES_FILE = "..\ingestion-service\out\benchmark\04_legal_contracts\corpus\aliases.json"
+go run . rebuild --input ..\ingestion-service\out\benchmark\04_legal_contracts\corpus ..\ingestion-service\out\benchmark\04_legal_contracts\chunks.jsonl
+```
+
+Манифест подготовленного корпуса сопоставляет преобразованные имена файлов с оригиналами. Не объединяйте несколько корпусов в одну пересборку, если вопросы и эталонные источники не рассчитаны на общий набор.
+
+## Оценка поиска
+
+После индексации запустите ingestion и retrieval, затем выполните команду из корня репозитория:
+
+```powershell
+.\ingestion-service\.venv\Scripts\python .\benchmark\run_retrieval.py 04_legal_contracts --split test --repeat 3
+```
+
+Для каждого выбранного запроса запускаются стратегии `vector`, `graph_local` и `hybrid`. Результаты по запросам в JSONL и сводка в JSON записываются в `ingestion-service/out/benchmark-results/`. Подготовленные имена источников сопоставляются с оригинальными через `manifest.json`.
+
+Считаются точность и полнота найденных источников на заданном `limit`, полнота графовых фактов (если они размечены), число частичных ответов, медианная задержка и p95 — в целом и по категориям запросов. Это метрики поиска; качество и достоверность сгенерированного ответа потребуют отдельного этапа с генеративной моделью.
+
+Запустите тесты расчёта метрик:
+
+```powershell
+.\ingestion-service\.venv\Scripts\python -m unittest benchmark.test_run_retrieval
+```
+
+Текущий бенчмарк — пилотная проверка, а не статистически достаточная выборка. Перед общими выводами расширьте и вручную проверьте набор случаев.

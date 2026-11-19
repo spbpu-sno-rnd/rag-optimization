@@ -1,6 +1,9 @@
 {
   "Robert Vance": [
     "Patient #8821",
+    "Patient chart 8821",
+    "chart 8821",
+    "patient 8821",
     "Robert Vance",
     "Patient Vance"
   ],
@@ -30,5 +33,8 @@
   "Pharma Interactions Guide": [
     "2024 Clinical Pharmacology Guide",
     "Pharmacology Guide"
+  ],
+  "Department of Nephrology": [
+    "Nephrology department"
   ]
 }

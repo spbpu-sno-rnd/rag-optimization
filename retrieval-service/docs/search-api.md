@@ -1,10 +1,10 @@
-# Search API
+# API поиска
 
-The retrieval service exposes a JSON REST API over `net/http`.
+Сервис retrieval предоставляет JSON REST API на `net/http`.
 
 ## `POST /v1/search`
 
-Request:
+Пример запроса:
 
 ```json
 {
@@ -15,18 +15,18 @@ Request:
 }
 ```
 
-Fields:
+Поля запроса:
 
-| Field | Type | Required | Default | Notes |
-|---|---|---:|---:|---|
-| `query` | string | yes | — | Non-empty search text |
-| `strategy` | string | no | `hybrid` | One of `vector`, `graph_local`, `hybrid` |
-| `limit` | integer | no | `5` | Result count from 1 to 100 |
-| `graph_depth` | integer | no | `1` | Graph neighborhood depth, either 1 or 2; used by graph and hybrid search |
+| Поле | Тип | Обязательное | По умолчанию | Описание |
+|---|---|---:|---|---|
+| `query` | string | да | — | Непустой текст запроса |
+| `strategy` | string | нет | `hybrid` | Одна из стратегий: `vector`, `graph_local`, `hybrid` |
+| `limit` | integer | нет | `5` | Число результатов от 1 до 100 |
+| `graph_depth` | integer | нет | `1` | Глубина обхода графа: 1 или 2; используется для graph и hybrid |
 
-The request body must be one JSON object no larger than 1 MiB. Unknown fields are rejected.
+Тело запроса должно содержать один JSON-объект размером не более 1 МиБ. Неизвестные поля отклоняются.
 
-Successful response (`200 OK`):
+Пример успешного ответа (`200 OK`):
 
 ```json
 {
@@ -58,14 +58,16 @@ Successful response (`200 OK`):
 }
 ```
 
-`results` contains retrieved chunks. Graph search includes only evidence chunks referenced by `source_chunk_ids` on the traversed relationships; hybrid results fuse these with vector results by chunk ID. In hybrid responses, `graph_facts` only includes facts with at least one supporting chunk in the final `results`, and each fact's `source_chunk_ids` is limited to those returned chunks. `distance` is the shortest number of graph hops from a matched query entity to that relationship.
+`results` содержит найденные чанки. Графовый поиск добавляет только чанки-доказательства, указанные в `source_chunk_ids` пройденных связей. Гибридный поиск объединяет их с результатами векторного поиска по ID чанков.
 
-`score` is strategy-dependent: vector search returns the vector store score, graph search ranks evidence by relationship distance, and hybrid search returns the Reciprocal Rank Fusion score. Scores from different strategies are not directly comparable. `sources` identifies which retrieval paths contributed the result.
+В ответе hybrid `graph_facts` содержит только факты, для которых в итоговом `results` есть хотя бы один подтверждающий чанк. В `source_chunk_ids` каждого факта остаются только ID чанков, включённых в результат. `distance` — минимальное число переходов по графу от найденной сущности из запроса до соответствующей связи.
 
-`vector_status` and `graph_status` are `ok`, `error`, or `skipped`. Hybrid search returns available results with `partial: true` and logs a warning if one retrieval source fails; if both sources fail, it returns `500`. A graph search is `skipped` when query processing finds no entities. For non-hybrid strategies, the unused source is `skipped`.
+`score` зависит от стратегии: векторный поиск возвращает оценку хранилища, графовый ранжирует доказательства по расстоянию связи, а гибридный возвращает оценку Reciprocal Rank Fusion. Значения из разных стратегий напрямую не сравниваются. `sources` указывает, какие пути поиска добавили результат.
 
-Errors are JSON objects of the form `{"error":"..."}`. Invalid requests return `400 Bad Request`; retrieval failures return `500 Internal Server Error`.
+`vector_status` и `graph_status` принимают значения `ok`, `error` или `skipped`. Если один источник гибридного поиска недоступен, сервис записывает предупреждение и возвращает результаты другого с `partial: true`. Если недоступны оба источника, возвращается `500`. Графовый поиск получает статус `skipped`, когда обработка запроса не нашла сущностей. Для не-гибридных стратегий неиспользуемый источник также получает `skipped`.
+
+Ошибки возвращаются в виде JSON-объектов `{"error":"..."}`. Некорректный запрос даёт `400 Bad Request`, ошибка поиска — `500 Internal Server Error`.
 
 ## `GET /healthz`
 
-Returns `200 OK` and `{"status":"ok"}` when the HTTP process is serving requests. This is a liveness check, not a dependency-readiness check for Qdrant or Neo4j.
+Когда HTTP-процесс принимает запросы, возвращается `200 OK` и `{"status":"ok"}`. Это проверка жизнеспособности процесса, а не готовности Qdrant или Neo4j.
